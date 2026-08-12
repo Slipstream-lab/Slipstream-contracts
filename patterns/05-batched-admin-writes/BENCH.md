@@ -39,6 +39,22 @@ The key insight: **footprint width, not just hot keys, drives contention.**
 Collapsing related state that is always updated together into one entry
 minimises the surface area a transaction exposes to the conflict graph.
 
+## Invariant: config width does not widen the write-footprint
+
+The whole point of the optimized variant is that adding a field to `Config`
+leaves `set_config`'s write-footprint at a single ledger key. This is pinned by
+tests (see `optimized/src/test.rs`):
+
+- `config_write_touches_exactly_one_persistent_key` — after writing a six-field
+  `Config`, the contract has exactly **one** persistent entry.
+- `repeated_config_writes_stay_one_key` — overwriting the config does not
+  accumulate keys.
+
+The tests read the test-env persistent store directly
+(`env.storage().persistent().all().len()`), so the assertion is on the actual
+ledger footprint, not a proxy. Contrast the naive variant, whose `set_config`
+writes `n` keys for `n` fields.
+
 ## Benchmark methodology (via slipstream-core)
 
 1. `slipstream scan` both variants; capture the write-footprint *size* of
