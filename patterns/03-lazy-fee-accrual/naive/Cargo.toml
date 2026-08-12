@@ -1,0 +1,17 @@
+[package]
+name = "p03-lazy-fee-accrual-naive"
+description = "Naive fees: every operation writes a single global fee accumulator key."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

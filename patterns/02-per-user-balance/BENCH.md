@@ -1,0 +1,61 @@
+# Pattern 02 - Per-User Balance
+
+## Contention problem
+
+The **naive** ledger stores every account's balance in a single
+`Map<Address, i128>` under one key, `Balances`. Any `deposit` or `transfer`
+must read the whole map, mutate it, and write it back, so the write-footprint of
+every balance-changing transaction is `{Balances}`.
+
+Consequently Alice depositing and Bob depositing conflict on `Balances` even
+though they touch logically-independent balances. Under CAP-0063 all
+balance mutations serialise on that one key -- an artificial dependency created
+purely by co-locating unrelated state in one ledger entry.
+
+## The optimization
+
+The **optimized** ledger gives each account its own key, `Balance(addr)`.
+
+- `deposit(to)` writes only `{Balance(to)}`.
+- `transfer(from, to)` writes `{Balance(from), Balance(to)}` -- the *real*,
+  unavoidable dependency between two specific accounts.
+- `balance(who)` reads only `{Balance(who)}` (the naive `balance` had to read
+  the entire map).
+
+## Why it improves parallelism (CAP-0063)
+
+- Naive: every mutation writes `Balances`; the conflict graph over `M` mutations
+  is an `M`-clique -> ~`M` stages (fully serial).
+- Optimized: deposits to distinct accounts are independent (disjoint
+  footprints). Transfers conflict only when they share an endpoint account. The
+  conflict graph mirrors the *actual* account-sharing structure of the batch, so
+  the scheduler can run all non-overlapping operations in one stage.
+
+The optimization removes false sharing: contention now reflects genuine data
+dependencies (same account touched twice) instead of an implementation artifact.
+It also shrinks read footprints (one key instead of the whole map), further
+reducing conflict-graph edges against readers.
+
+## Benchmark methodology (via slipstream-core)
+
+1. `slipstream scan` both variants; capture per-function `storage_reads` /
+   `storage_writes` and any `map-under-single-key` / `global-write-hotkey`
+   detector findings.
+2. `slipstream diff naive optimized --json`; read `summary.*_delta` and
+   `per_function_deltas` for `deposit` / `transfer` / `balance`.
+3. Construct a synthetic batch: `K` deposits over distinct accounts plus a few
+   transfers with controlled endpoint overlap. Have slipstream-core build the
+   footprint conflict graph and count edges + parallel stages.
+4. Report edges/stages for both; expect the optimized batch to collapse to a
+   small number of stages driven only by true endpoint sharing, versus one
+   stage per operation in the naive variant.
+
+## Results
+
+| Metric | Naive | Optimized | Delta |
+| --- | --- | --- | --- |
+| storage writes (deposit) | TBD (not yet measured) | TBD | TBD |
+| storage reads (balance) | TBD | TBD | TBD |
+| conflict-graph edges (K deposits) | TBD | TBD | TBD |
+| parallel stages (K deposits) | TBD | TBD | TBD |
+| detector findings | TBD | TBD | TBD |

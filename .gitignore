@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target
+**/target
+
+# Soroban test snapshots (regenerated on every `cargo test` run)
+**/test_snapshots/
+
+# Backup / editor files
+*.rs.bk
+*.swp
+*~
+
+# macOS
+.DS_Store
+
+# Local env overrides (never commit secrets)
+.env

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build on any warning in normal compiles too (clippy is stricter below).
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Contracts test against soroban_sdk::testutils (the SDK's native env);
+      # no stellar/soroban CLI is required.
+      - run: cargo test --workspace
+
+  wasm:
+    name: build contracts (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # NOTE: soroban-sdk 27's build.rs rejects `wasm32-unknown-unknown` on
+      # Rust >= 1.82 (that target enables reference-types/multi-value, which the
+      # Soroban host does not accept) and directs you to `wasm32v1-none`, which
+      # is the supported wasm target from Rust 1.84 onward. We therefore build
+      # the contract cdylibs for `wasm32v1-none`. See docs/PLAYBOOK.md and
+      # README.md ("Building to wasm") for the full explanation.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+      - uses: Swatinem/rust-cache@v2
+      # The harness is a native binary (it shells out to slipstream-core), so it
+      # is excluded from the wasm build. Only the contract crates target wasm.
+      - run: cargo build --workspace --exclude harness --target wasm32v1-none --release
