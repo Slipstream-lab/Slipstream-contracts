@@ -48,6 +48,18 @@ should serve both.
 
 ## Checks (run before every PR)
 
+The `Makefile` mirrors CI so you don't have to remember the commands (or the
+`wasm32v1-none` target quirk):
+
+```bash
+make check   # fmt + clippy + native tests (fast local gate)
+make wasm     # build the contract cdylibs for wasm32v1-none
+make all      # everything CI runs: fmt, clippy, test, wasm build
+make help     # list all targets
+```
+
+Equivalently, the underlying commands are:
+
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings

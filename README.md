@@ -68,6 +68,16 @@ Each contract is its own crate (`crate-type = ["cdylib", "rlib"]`) depending on
 Tests use `soroban_sdk::testutils` (the SDK's native test environment) — **no
 `stellar`/`soroban` CLI is required**.
 
+A `Makefile` mirrors CI (run `make help` to list targets):
+
+```bash
+make check   # fmt + clippy + native tests
+make wasm    # build the contract cdylibs for wasm32v1-none
+make all     # everything CI runs
+```
+
+The underlying commands:
+
 ```bash
 # Run every contract's behavioural tests and the harness unit tests.
 cargo test --workspace
