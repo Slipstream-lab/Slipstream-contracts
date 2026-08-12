@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "patterns/01-sharded-counter/naive",
+    "patterns/01-sharded-counter/optimized",
+    "patterns/02-per-user-balance/naive",
+    "patterns/02-per-user-balance/optimized",
+    "patterns/03-lazy-fee-accrual/naive",
+    "patterns/03-lazy-fee-accrual/optimized",
+    "patterns/04-temporary-nonce/naive",
+    "patterns/04-temporary-nonce/optimized",
+    "patterns/05-batched-admin-writes/naive",
+    "patterns/05-batched-admin-writes/optimized",
+    "harness",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Slipstream Lab"]
+repository = "https://github.com/Slipstream-lab/Slipstream-contracts"
+
+[workspace.dependencies]
+soroban-sdk = "27"
+
+# Release profile tuned for small, deterministic Soroban wasm artifacts.
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
