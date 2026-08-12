@@ -1,0 +1,63 @@
+# Pattern 05 - Batched Admin Writes
+
+## Contention problem
+
+The **naive** admin path writes each configuration field to its own ledger key
+in a loop: `set_config(values)` touches `{Setting(0), Setting(1), ...,
+Setting(n-1)}`. That wide write-footprint inflates the conflict graph:
+
+- Every concurrent transaction that reads *any* config field now has a
+  read/write conflict edge with the admin transaction.
+- Two admin transactions maximally overlap (they write the same wide set).
+
+Under CAP-0063 a wide footprint is strictly harder to schedule into a parallel
+stage than a narrow one, because it collides with more of the batch. The number
+of conflict edges an admin write creates grows linearly with the number of
+config fields.
+
+## The optimization
+
+The **optimized** admin path stores the entire configuration as one `Config`
+struct under a single key, `Config`. `set_config(config)` writes exactly
+`{Config}` regardless of how many fields change.
+
+- Adding a new config field does **not** widen the write-footprint (the struct
+  gains a field; the key set stays `{Config}`).
+- Readers read the whole struct; reads don't create write-write conflicts, so
+  this trades a slightly larger read for a much smaller, fixed write-footprint.
+
+## Why it improves parallelism (CAP-0063)
+
+- Naive: an admin write's conflict-graph degree is `O(number of fields x readers
+  per field)`. Two admin writes always conflict on the full field set.
+- Optimized: an admin write's write-footprint is a single key, so its
+  conflict-graph degree is bounded and independent of the config size. The
+  scheduler sees one narrow node instead of a wide one, making the admin
+  transaction far easier to place and reducing edges against unrelated readers.
+
+The key insight: **footprint width, not just hot keys, drives contention.**
+Collapsing related state that is always updated together into one entry
+minimises the surface area a transaction exposes to the conflict graph.
+
+## Benchmark methodology (via slipstream-core)
+
+1. `slipstream scan` both variants; capture the write-footprint *size* of
+   `set_config` (number of distinct keys) and any `wide-write-footprint`
+   detector findings.
+2. `slipstream diff naive optimized --json`; read
+   `per_function_deltas` for `set_config` (expect a large negative
+   `writes_delta`) and `summary.storage_writes_delta`.
+3. Vary the number of config fields `n`; for each, have slipstream-core report
+   `set_config`'s footprint size and its conflict-graph degree against a fixed
+   set of concurrent readers. Plot degree vs `n`.
+4. Report footprint size and conflict edges: expect the naive footprint/edges to
+   grow with `n` while the optimized stays flat at one key.
+
+## Results
+
+| Metric | Naive | Optimized | Delta |
+| --- | --- | --- | --- |
+| write-footprint size (set_config, n fields) | TBD (not yet measured) | TBD | TBD |
+| conflict-graph degree vs readers | TBD | TBD | TBD |
+| storage writes delta | TBD | TBD | TBD |
+| detector findings | TBD | TBD | TBD |
