@@ -17,15 +17,23 @@
 use soroban_sdk::{contract, contractimpl, contracttype, Env};
 
 /// The full contract configuration, versioned so it can evolve in one write.
+///
+/// Adding a field here is deliberately cheap: because the whole struct lives
+/// under the single [`DataKey::Config`] key, a wider `Config` does **not**
+/// widen `set_config`'s write-footprint. The `config_stays_one_key_*` tests
+/// pin that invariant.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub fee_bps: u32,
     pub max_amount: i128,
     pub paused: bool,
-    // TODO: additional config fields land here as the contract grows. Because
-    // the whole struct is one ledger key, adding a field does NOT widen the
-    // write-footprint of `set_config` -- that is the whole point of the pattern.
+    // Fields added as the contract grows. Each one would be a *separate* ledger
+    // key (and conflict-graph vertex) in the naive variant; here they ride
+    // along in the single `Config` entry for free.
+    pub admin_count: u32,
+    pub min_amount: i128,
+    pub fee_recipient_set: bool,
 }
 
 impl Config {
@@ -35,6 +43,9 @@ impl Config {
             fee_bps: 0,
             max_amount: 0,
             paused: false,
+            admin_count: 0,
+            min_amount: 0,
+            fee_recipient_set: false,
         }
     }
 }
