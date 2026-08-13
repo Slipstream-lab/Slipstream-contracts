@@ -134,6 +134,22 @@ deltas plus an improvement verdict). Patterns missing a side are reported in
 the table rather than aborting the run; if the `slipstream` binary is absent
 the command fails fast with an actionable message.
 
+Regenerate the measured numbers in every `BENCH.md` with provenance:
+
+```bash
+# Same prerequisites as `all`, plus SLIPSTREAM_CORE_DIR so the core commit is
+# recorded alongside the contracts commit and environment.
+SLIPSTREAM_CORE_DIR=/path/to/slipstream-core \
+  cargo run -p harness --bin slipstream-harness -- bench
+```
+
+`bench` re-runs every complete pair and idempotently replaces the
+`## Measured deltas` block in each pattern's `BENCH.md` with the raw
+`slipstream diff --json` deltas and a provenance snapshot (OS, arch, `rustc`,
+`slipstream` version, commit SHAs of both repos, run time and the exact
+command). Numbers are never hand-edited and never fabricated: if the
+`slipstream` binary is absent, `bench` fails fast and the tables stay `TBD`.
+
 It abstracts core behind a `CoreRunner` trait: `SubprocessRunner` (real binary)
 and `MockRunner` (canned JSON for tests). The delta computation is unit-tested
 against the mock, so `cargo test -p harness` passes with no external binary.
