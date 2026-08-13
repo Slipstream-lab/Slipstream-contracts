@@ -122,6 +122,18 @@ findings).
 cargo run -p harness --bin slipstream-harness -- patterns/01-sharded-counter
 ```
 
+Run every pattern pair in the corpus and print a summary table:
+
+```bash
+cargo run -p harness --bin slipstream-harness -- all
+```
+
+`all` discovers every `patterns/NN-*/` directory, analyzes each complete
+`naive`/`optimized` pair, and prints one row per pattern (write/read/finding
+deltas plus an improvement verdict). Patterns missing a side are reported in
+the table rather than aborting the run; if the `slipstream` binary is absent
+the command fails fast with an actionable message.
+
 It abstracts core behind a `CoreRunner` trait: `SubprocessRunner` (real binary)
 and `MockRunner` (canned JSON for tests). The delta computation is unit-tested
 against the mock, so `cargo test -p harness` passes with no external binary.

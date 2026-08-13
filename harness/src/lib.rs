@@ -13,7 +13,7 @@
 //!
 //! [`slipstream-core`]: https://github.com/Slipstream-lab/Slipstream-core
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod model;
 
@@ -29,7 +29,6 @@ pub enum HarnessError {
     /// The core binary's output was not valid JSON in the expected shape.
     Parse(String),
 }
-
 impl std::fmt::Display for HarnessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -106,6 +105,217 @@ pub fn analyze_pair(
 }
 
 // ---------------------------------------------------------------------------
+// Whole-corpus runs (`harness all`)
+// ---------------------------------------------------------------------------
+
+/// A pattern discovered under `patterns/`, with whatever sides are present.
+///
+/// A pattern directory is any entry named `NN-<name>` (two digits, a dash,
+/// then a name). A missing `naive/` or `optimized/` side is recorded, not
+/// fatal — the corpus is allowed to hold in-progress patterns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pattern {
+    /// Full directory name, e.g. `01-sharded-counter`.
+    pub name: String,
+    /// Path to the pattern directory itself.
+    pub dir: PathBuf,
+    /// `dir/naive` when it exists.
+    pub naive: Option<PathBuf>,
+    /// `dir/optimized` when it exists.
+    pub optimized: Option<PathBuf>,
+}
+
+impl Pattern {
+    /// True when both sides exist and the pair can be analyzed.
+    pub fn is_complete(&self) -> bool {
+        self.naive.is_some() && self.optimized.is_some()
+    }
+}
+
+/// Discover every `patterns/NN-*/` directory below `patterns_dir`.
+///
+/// Entries that do not look like `NN-<name>` are ignored so the directory may
+/// also hold non-pattern files or directories.
+pub fn discover_patterns(patterns_dir: &Path) -> Vec<Pattern> {
+    let mut patterns = Vec::new();
+    let Ok(entries) = std::fs::read_dir(patterns_dir) else {
+        return patterns;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            continue;
+        };
+        if !is_pattern_name(&name) {
+            continue;
+        }
+        let naive = path.join("naive");
+        let optimized = path.join("optimized");
+        patterns.push(Pattern {
+            name,
+            dir: path,
+            naive: naive.is_dir().then_some(naive),
+            optimized: optimized.is_dir().then_some(optimized),
+        });
+    }
+    patterns.sort_by(|a, b| a.name.cmp(&b.name));
+    patterns
+}
+
+/// A `NN-<name>` pattern directory name: two ASCII digits then a dash.
+fn is_pattern_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_digit() && bytes[1].is_ascii_digit() && bytes[2] == b'-'
+}
+
+/// The outcome of analyzing one pattern in a batch run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternResult {
+    /// Pattern name (same as [`Pattern::name`]).
+    pub pattern: String,
+    /// Computed delta when the pair was complete and analyzed.
+    pub delta: Option<ContentionDelta>,
+    /// Which sides were missing (`"naive"` / `"optimized"`).
+    pub missing_sides: Vec<&'static str>,
+    /// Analysis error for this pair, if any (e.g. core exited non-zero).
+    pub error: Option<String>,
+}
+
+impl PatternResult {
+    /// Human verdict for the table: an improvement summary, a missing-side
+    /// note, or the error.
+    pub fn verdict(&self) -> String {
+        if !self.missing_sides.is_empty() {
+            return format!("missing {}", self.missing_sides.join(" and "));
+        }
+        if let Some(err) = &self.error {
+            return format!("error: {err}");
+        }
+        match &self.delta {
+            Some(d) if d.is_improvement() => "IMPROVEMENT".to_string(),
+            Some(_) => "NO IMPROVEMENT".to_string(),
+            None => "unknown".to_string(),
+        }
+    }
+}
+
+/// Run every complete pattern pair, collecting results.
+///
+/// Missing sides never abort the batch: they are recorded in the result and
+/// the run continues. A pattern whose pair is complete but fails to analyze
+/// (e.g. core exits non-zero) is recorded as an error and the run continues.
+pub fn run_all(runner: &dyn CoreRunner, patterns: &[Pattern]) -> Vec<PatternResult> {
+    patterns
+        .iter()
+        .map(|p| {
+            let (Some(naive), Some(optimized)) = (&p.naive, &p.optimized) else {
+                let mut missing = Vec::new();
+                if p.naive.is_none() {
+                    missing.push("naive");
+                }
+                if p.optimized.is_none() {
+                    missing.push("optimized");
+                }
+                return PatternResult {
+                    pattern: p.name.clone(),
+                    delta: None,
+                    missing_sides: missing,
+                    error: None,
+                };
+            };
+            match analyze_pair(runner, naive, optimized) {
+                Ok(delta) => PatternResult {
+                    pattern: p.name.clone(),
+                    delta: Some(delta),
+                    missing_sides: Vec::new(),
+                    error: None,
+                },
+                Err(e) => PatternResult {
+                    pattern: p.name.clone(),
+                    delta: None,
+                    missing_sides: Vec::new(),
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Render a one-row-per-pattern summary table.
+///
+/// Columns: pattern, storage-writes delta, storage-reads delta, detector
+/// findings delta, verdict. Incomplete or failed patterns show `-` for the
+/// deltas and their reason in the verdict column.
+pub fn render_table(results: &[PatternResult]) -> String {
+    const HEADERS: [&str; 5] = ["pattern", "writes", "reads", "findings", "verdict"];
+
+    fn cell_delta(d: &Option<ContentionDelta>, pick: fn(&ContentionDelta) -> i64) -> String {
+        d.as_ref()
+            .map(pick)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    let rows: Vec<[String; 5]> = results
+        .iter()
+        .map(|r| {
+            [
+                r.pattern.clone(),
+                cell_delta(&r.delta, |d| d.storage_writes_delta),
+                cell_delta(&r.delta, |d| d.storage_reads_delta),
+                cell_delta(&r.delta, |d| d.detector_findings_delta),
+                r.verdict(),
+            ]
+        })
+        .collect();
+
+    let mut widths = HEADERS.map(str::len);
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+
+    let mut out = String::new();
+    let header_line = HEADERS
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            if i == 0 {
+                format!("{h:<width$}", width = widths[i])
+            } else {
+                format!("{h:>width$}", width = widths[i])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+    out.push_str(&header_line);
+    out.push('\n');
+    out.push_str(&"-".repeat(header_line.len()));
+    out.push('\n');
+    for row in &rows {
+        let line = row
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                if i == 0 {
+                    format!("{cell:<width$}", width = widths[i])
+                } else {
+                    format!("{cell:>width$}", width = widths[i])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Real runner: shells out to the `slipstream` binary.
 // ---------------------------------------------------------------------------
 
@@ -129,6 +339,17 @@ impl SubprocessRunner {
     /// Build a runner pointing at an explicit binary path.
     pub fn new(bin: impl Into<String>) -> Self {
         SubprocessRunner { bin: bin.into() }
+    }
+
+    /// True when the configured binary can be launched at all.
+    ///
+    /// Used to preflight a batch run so a missing `slipstream` is reported
+    /// once, up front, instead of as a failure per pattern.
+    pub fn available(&self) -> bool {
+        std::process::Command::new(&self.bin)
+            .arg("--version")
+            .output()
+            .is_ok()
     }
 
     fn run(&self, args: &[&str]) -> Result<String, HarnessError> {

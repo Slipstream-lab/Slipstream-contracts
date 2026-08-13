@@ -1,6 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::{analyze_pair, contention_delta, model::DiffReport, MockRunner};
+use crate::{
+    analyze_pair, contention_delta, discover_patterns, model::DiffReport, render_table, run_all,
+    ContentionDelta, CoreRunner, HarnessError, MockRunner, Pattern, PatternResult,
+};
 
 /// A representative `slipstream diff --json` payload for pattern 01: the
 /// optimized (sharded) variant does one fewer contended write and clears the
@@ -153,4 +156,208 @@ fn parses_real_scan_report() {
         .unwrap();
     assert_eq!(global.function, None);
     assert_eq!(global.key.as_deref(), Some("Counter"));
+}
+
+// ---------------------------------------------------------------------------
+// Whole-corpus run (`harness all`): discovery, batch run, table rendering.
+// ---------------------------------------------------------------------------
+
+/// A private temp dir, removed when the test finishes.
+fn tmp_dir(tag: &str) -> PathBuf {
+    let base =
+        std::env::temp_dir().join(format!("slipstream-harness-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    base
+}
+
+fn mkdirs(base: &Path, paths: &[&str]) {
+    for p in paths {
+        std::fs::create_dir_all(base.join(p)).unwrap();
+    }
+}
+
+#[test]
+fn discover_patterns_finds_complete_and_incomplete() {
+    let base = tmp_dir("discover");
+    mkdirs(
+        &base,
+        &[
+            "01-alpha/naive",
+            "01-alpha/optimized",
+            "02-beta/naive", // no optimized side
+            "03-gamma",      // no sides at all
+            "src",           // non-pattern dir, ignored
+        ],
+    );
+    std::fs::write(base.join("README.md"), "").unwrap(); // non-pattern file, ignored
+
+    let patterns = discover_patterns(&base);
+    let names: Vec<&str> = patterns.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["01-alpha", "02-beta", "03-gamma"]);
+
+    assert!(patterns[0].is_complete(), "01 has both sides");
+    assert!(patterns[0].naive.is_some() && patterns[0].optimized.is_some());
+
+    assert!(!patterns[1].is_complete());
+    assert!(patterns[1].naive.is_some());
+    assert!(patterns[1].optimized.is_none());
+
+    assert!(!patterns[2].is_complete());
+    assert!(patterns[2].naive.is_none());
+    assert!(patterns[2].optimized.is_none());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn discover_patterns_ignores_non_pattern_names() {
+    let base = tmp_dir("nonpatterns");
+    mkdirs(
+        &base,
+        &["05x/naive", "x/naive", "01-x/naive", "01-x/optimized"],
+    );
+    let patterns = discover_patterns(&base);
+    let names: Vec<&str> = patterns.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["01-x"], "only NN-<name> dirs are patterns");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn run_all_reports_missing_sides_without_aborting() {
+    let base = tmp_dir("runall");
+    mkdirs(
+        &base,
+        &[
+            "01-good/naive",
+            "01-good/optimized",
+            "02-no-opt/naive",
+            "03-no-naive/optimized",
+        ],
+    );
+    let patterns = discover_patterns(&base);
+    let runner = MockRunner::with_diff(SAMPLE_DIFF);
+    let results = run_all(&runner, &patterns);
+    assert_eq!(results.len(), 3);
+
+    assert_eq!(results[0].pattern, "01-good");
+    assert!(results[0].delta.is_some());
+    assert!(results[0].missing_sides.is_empty());
+    assert_eq!(results[0].verdict(), "IMPROVEMENT");
+
+    assert_eq!(results[1].pattern, "02-no-opt");
+    assert!(results[1].delta.is_none());
+    assert_eq!(results[1].missing_sides, vec!["optimized"]);
+    assert_eq!(results[1].verdict(), "missing optimized");
+
+    assert_eq!(results[2].pattern, "03-no-naive");
+    assert!(results[2].delta.is_none());
+    assert_eq!(results[2].missing_sides, vec!["naive"]);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A runner that fails for any pair whose naive path contains "bad".
+struct FlakyRunner;
+
+impl CoreRunner for FlakyRunner {
+    fn diff(&self, left: &Path, _right: &Path) -> Result<String, HarnessError> {
+        if left.to_string_lossy().contains("bad") {
+            Err(HarnessError::Spawn("boom".into()))
+        } else {
+            Ok(SAMPLE_DIFF.to_string())
+        }
+    }
+
+    fn scan(&self, _path: &Path) -> Result<String, HarnessError> {
+        Ok(String::new())
+    }
+}
+
+#[test]
+fn run_all_continues_past_a_failed_pair() {
+    let base = tmp_dir("flaky");
+    mkdirs(
+        &base,
+        &[
+            "01-good/naive",
+            "01-good/optimized",
+            "02-bad/naive",
+            "02-bad/optimized",
+        ],
+    );
+    let patterns = discover_patterns(&base);
+    let results = run_all(&FlakyRunner, &patterns);
+    assert_eq!(results.len(), 2);
+
+    assert!(results[0].delta.is_some(), "good pair still analyzed");
+    assert!(results[0].error.is_none());
+
+    assert!(results[1].delta.is_none());
+    assert!(results[1].error.is_some(), "failure is recorded, not fatal");
+    assert_eq!(
+        results[1].verdict(),
+        "error: failed to launch slipstream: boom"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn render_table_has_one_row_per_pattern_with_verdicts() {
+    let results = vec![
+        PatternResult {
+            pattern: "01-alpha".into(),
+            delta: Some(ContentionDelta {
+                storage_writes_delta: -2,
+                storage_reads_delta: 3,
+                detector_findings_delta: -1,
+            }),
+            missing_sides: Vec::new(),
+            error: None,
+        },
+        PatternResult {
+            pattern: "02-beta".into(),
+            delta: None,
+            missing_sides: vec!["optimized"],
+            error: None,
+        },
+        PatternResult {
+            pattern: "03-gamma".into(),
+            delta: None,
+            missing_sides: Vec::new(),
+            error: Some("slipstream exited with Some(1)".into()),
+        },
+    ];
+    let table = render_table(&results);
+    let lines: Vec<&str> = table.lines().collect();
+    assert_eq!(lines.len(), 5, "header + divider + one row per pattern");
+
+    assert!(lines[0].contains("pattern"));
+    assert!(lines[0].contains("writes"));
+    assert!(lines[0].contains("reads"));
+    assert!(lines[0].contains("findings"));
+    assert!(lines[0].contains("verdict"));
+
+    assert!(lines[2].contains("01-alpha"));
+    assert!(lines[2].contains("-2"));
+    assert!(lines[2].contains("IMPROVEMENT"));
+
+    assert!(lines[3].contains("02-beta"));
+    assert!(lines[3].contains("missing optimized"));
+
+    assert!(lines[4].contains("03-gamma"));
+    assert!(lines[4].contains("error: slipstream exited with Some(1)"));
+}
+
+#[test]
+fn pattern_is_complete_only_with_both_sides() {
+    let base = tmp_dir("complete");
+    mkdirs(&base, &["01-x/naive", "01-x/optimized"]);
+    let patterns = discover_patterns(&base);
+    let p: &Pattern = &patterns[0];
+    assert!(p.is_complete());
+    assert_eq!(p.naive, Some(base.join("01-x/naive")));
+    assert_eq!(p.optimized, Some(base.join("01-x/optimized")));
+    let _ = std::fs::remove_dir_all(&base);
 }
