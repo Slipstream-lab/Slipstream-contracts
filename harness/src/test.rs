@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    analyze_pair, contention_delta, discover_patterns, model::DiffReport, render_table, run_all,
-    ContentionDelta, CoreRunner, HarnessError, MockRunner, Pattern, PatternResult,
+    analyze_pair, contention_delta, discover_patterns, model::DiffReport, render_bench_block,
+    render_table, run_all, signed_delta, update_bench_md, BenchProvenance, ContentionDelta,
+    CoreRunner, HarnessError, MockRunner, Pattern, PatternResult,
 };
 
 /// A representative `slipstream diff --json` payload for pattern 01: the
@@ -359,5 +360,133 @@ fn pattern_is_complete_only_with_both_sides() {
     assert!(p.is_complete());
     assert_eq!(p.naive, Some(base.join("01-x/naive")));
     assert_eq!(p.optimized, Some(base.join("01-x/optimized")));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
+// `harness bench`: measured deltas written into BENCH.md with provenance.
+// ---------------------------------------------------------------------------
+
+fn sample_provenance() -> BenchProvenance {
+    BenchProvenance {
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        rustc: "rustc 1.85.0".into(),
+        slipstream_version: "slipstream 0.1.0".into(),
+        contracts_sha: "contracts-sha".into(),
+        core_sha: "core-sha".into(),
+        run_time: "12345".into(),
+        command: "slipstream-harness bench".into(),
+    }
+}
+
+#[test]
+fn bench_block_contains_deltas_and_provenance() {
+    let delta = ContentionDelta {
+        storage_writes_delta: -1,
+        storage_reads_delta: 8,
+        detector_findings_delta: 0,
+    };
+    let block = render_bench_block("01-alpha", &delta, &sample_provenance());
+
+    assert!(block.contains(crate::BENCH_BEGIN));
+    assert!(block.contains(crate::BENCH_END));
+    assert!(block.contains("01-alpha"));
+    assert!(block.contains("| storage writes | -1 |"));
+    assert!(block.contains("| storage reads | +8 |"));
+    assert!(block.contains("| detector findings | 0 |"));
+    assert!(block.contains("contracts@contracts-sha"));
+    assert!(block.contains("core@core-sha"));
+    assert!(block.contains("slipstream 0.1.0"));
+    assert!(
+        block.ends_with(crate::BENCH_END),
+        "block ends at the END marker"
+    );
+}
+
+#[test]
+fn signed_delta_formats_plus_for_positives() {
+    assert_eq!(signed_delta(-3), "-3");
+    assert_eq!(signed_delta(0), "0");
+    assert_eq!(signed_delta(7), "+7");
+}
+
+#[test]
+fn update_bench_md_appends_when_missing() {
+    let base = tmp_dir("bench-append");
+    let path = base.join("BENCH.md");
+    std::fs::write(&path, "# Pattern\n\nbody\n").unwrap();
+
+    let block = render_bench_block(
+        "01-alpha",
+        &ContentionDelta {
+            storage_writes_delta: -1,
+            storage_reads_delta: 2,
+            detector_findings_delta: -1,
+        },
+        &sample_provenance(),
+    );
+    assert!(update_bench_md(&path, &block).unwrap());
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Pattern\n\nbody\n"),
+        "existing content preserved"
+    );
+    assert_eq!(content.matches(crate::BENCH_BEGIN).count(), 1);
+    assert_eq!(content.matches(crate::BENCH_END).count(), 1);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn update_bench_md_replaces_idempotently() {
+    let base = tmp_dir("bench-replace");
+    let path = base.join("BENCH.md");
+    std::fs::write(&path, "# Pattern\n\nbody\n").unwrap();
+
+    let block_a = render_bench_block(
+        "01-alpha",
+        &ContentionDelta {
+            storage_writes_delta: -1,
+            storage_reads_delta: 2,
+            detector_findings_delta: -1,
+        },
+        &sample_provenance(),
+    );
+    let block_b = render_bench_block(
+        "01-alpha",
+        &ContentionDelta {
+            storage_writes_delta: -2,
+            storage_reads_delta: 3,
+            detector_findings_delta: 0,
+        },
+        &sample_provenance(),
+    );
+
+    assert!(
+        update_bench_md(&path, &block_a).unwrap(),
+        "first write changes the file"
+    );
+    assert!(
+        !update_bench_md(&path, &block_a).unwrap(),
+        "same block is a no-op"
+    );
+    assert!(
+        update_bench_md(&path, &block_b).unwrap(),
+        "new block replaces the old"
+    );
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        content.matches(crate::BENCH_BEGIN).count(),
+        1,
+        "exactly one block"
+    );
+    assert!(content.contains("| storage writes | -2 |"));
+    assert!(!content.contains("| storage writes | -1 |"));
+    assert!(
+        content.starts_with("# Pattern\n\nbody\n"),
+        "surrounding text untouched"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
