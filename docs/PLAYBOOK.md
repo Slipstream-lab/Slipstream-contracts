@@ -117,11 +117,29 @@ pair and reports the **contention delta**.
   defined in `harness/src/model.rs` and mirror the documented `slipstream-core`
   output contract.
 
+### Expected detector findings
+
+`slipstream scan --json` over each `naive/` crate is pinned by the integration
+test `harness/tests/detector_conformance.rs` (run with `SLIPSTREAM_BIN` set;
+it skips cleanly otherwise). The expected findings below are the single source
+of truth for that test and reflect the detectors `slipstream-core` ships today:
+
+| Naive contract | Expected detectors |
+| --- | --- |
+| 01-sharded-counter | `read-modify-write` on `Counter` |
+| 02-per-user-balance | *(none)* — the whole `Balances` map lives under one key, but that false-sharing is not statically detectable as a single key today |
+| 03-lazy-fee-accrual | `read-modify-write` on `FeePool` and `(dynamic)` |
+| 04-temporary-nonce | `read-modify-write` on `Nonce` |
+| 05-batched-admin-writes | `write-in-loop` on `(dynamic)` |
+
+When a detector evolves, update both the test table and this one.
+
 ## Measurement discipline
 
-- **No fabricated numbers.** Every `BENCH.md` results table uses
-  `TBD (not yet measured)` placeholders. Populate them only from real
-  `slipstream-core` runs.
-- The methodology in each `BENCH.md` is the contract for *how* a number would be
-  produced (footprint sizes, conflict-graph edges, parallel-stage counts), so
-  results are reproducible and comparable across patterns.
+- **No fabricated numbers.** `BENCH.md` result tables are populated only from
+  real `slipstream-core` runs. The `slipstream-harness bench` command runs each
+  complete pair and writes the measured deltas (with full provenance) into the
+  `## Measured deltas` block of each `BENCH.md`, so the numbers are
+  reproducible and comparable across patterns.
+- The methodology in each `BENCH.md` is the contract for *how* a number is
+  produced (footprint sizes, conflict-graph edges, parallel-stage counts).
