@@ -62,6 +62,7 @@ Each contract is its own crate (`crate-type = ["cdylib", "rlib"]`) depending on
 | 03 | lazy-fee-accrual | eager global accumulator | per-account lazy accrual + sweep |
 | 04 | temporary-nonce | global persistent monotonic counter | per-user nonce in temporary storage |
 | 05 | batched-admin-writes | wide write-footprint | one config struct under one key |
+| 06 | event-log | shared append tail | per-writer segments, one tail per writer |
 
 ## Building and testing
 

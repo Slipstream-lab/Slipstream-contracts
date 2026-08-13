@@ -2,7 +2,7 @@
 
 This playbook is the conceptual companion to the `slipstream-contracts` corpus.
 It explains the contention taxonomy the patterns demonstrate, walks each of the
-five patterns, and describes how the corpus feeds the `slipstream-core`
+six patterns, and describes how the corpus feeds the `slipstream-core`
 analyzer.
 
 ## Background: parallel execution on Stellar (CAP-0063)
@@ -40,6 +40,7 @@ measurement methodology.
 | 03 | **Eager global accumulator** | a running total updated on every op | **Lazy accrual** — record locally, reconcile on demand |
 | 04 | **Global monotonic counter** | one persistent counter bumped by everyone | **Per-user + temporary storage** — scope uniqueness, evict cheaply |
 | 05 | **Wide write-footprint** | many keys written together in a loop | **Batching** — one struct under one key |
+| 06 | **Shared append tail** | one tail/count key read+written by every append | **Per-writer segments** — one tail pointer per writer |
 
 These families are not mutually exclusive; real contracts often combine them
 (e.g. per-user keys that also batch that user's fields into one struct).
@@ -59,8 +60,9 @@ link to the measured-deltas methodology in each pattern's `BENCH.md`.
 | 03-lazy-fee-accrual ([BENCH.md](patterns/03-lazy-fee-accrual/BENCH.md)) | Eager global accumulator | `(dynamic)` + `FeePool` — shared RMW on every `operate` | per-writer `(dynamic)` record; `FeePool` only on rare `sweep` | distinct writers' ops run in parallel; the shared key is touched only by reconciliation |
 | 04-temporary-nonce ([BENCH.md](patterns/04-temporary-nonce/BENCH.md)) | Global monotonic counter | `Nonce` — one counter RMW on every `next` | per-user `(dynamic)` key + temporary storage | distinct users hold disjoint keys; uniqueness is scoped per user and evicts cheaply |
 | 05-batched-admin-writes ([BENCH.md](patterns/05-batched-admin-writes/BENCH.md)) | Wide write-footprint | `(dynamic)` — many keys written in a loop per `set_config` (`write-in-loop`) | `Config` — one key holding the whole struct | the write-footprint collapses from N keys to one, shrinking conflict-graph surface per op |
+| 06-event-log ([BENCH.md](patterns/06-event-log/BENCH.md)) | Shared append tail | `Tail` — one pointer read+written by every append (`read-modify-write`) | `SegmentTail(segment)` — one per-writer tail pointer | appends to distinct segments touch disjoint keys and share a stage; only reads aggregate across segments |
 
-## The five patterns
+## The patterns
 
 ### 01 - Sharded counter
 - **Naive:** single `Counter` persistent key; every `increment()` conflicts.
@@ -96,6 +98,15 @@ link to the measured-deltas methodology in each pattern's `BENCH.md`.
   fixed footprint).
 - **Lesson:** collapse state that always changes together into one entry to
   minimise conflict-graph surface area.
+
+### 06 - Segmented event log
+- **Naive:** every `append` reads and writes the single shared `Tail` pointer,
+  serialising all appends behind one hot key.
+- **Optimized:** `append(segment, msg)` touches only
+  `SegmentTail(segment)` and that segment's entry; concurrent appends to
+  distinct segments never conflict.
+- **Lesson:** split a shared append point into per-writer segments; pay for it
+  with a wider read-side aggregation (`total_len`).
 
 ## How the corpus feeds slipstream-core
 
@@ -147,6 +158,7 @@ of truth for that test and reflect the detectors `slipstream-core` ships today:
 | 03-lazy-fee-accrual | `read-modify-write` on `FeePool` and `(dynamic)` |
 | 04-temporary-nonce | `read-modify-write` on `Nonce` |
 | 05-batched-admin-writes | `write-in-loop` on `(dynamic)` |
+| 06-event-log | `read-modify-write` on `Tail` |
 
 When a detector evolves, update both the test table and this one.
 

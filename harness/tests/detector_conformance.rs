@@ -29,6 +29,7 @@ const EXPECTED_DETECTORS: &[(&str, &[&str])] = &[
     ("03-lazy-fee-accrual", &["read-modify-write"]),
     ("04-temporary-nonce", &["read-modify-write"]),
     ("05-batched-admin-writes", &["write-in-loop"]),
+    ("06-event-log", &["read-modify-write"]),
 ];
 
 fn repo_root() -> PathBuf {
