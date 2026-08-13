@@ -61,3 +61,33 @@ jobs:
       # The harness is a native binary (it shells out to slipstream-core), so it
       # is excluded from the wasm build. Only the contract crates target wasm.
       - run: cargo build --workspace --exclude harness --target wasm32v1-none --release
+      # Size guard: a GENEROUS regression tripwire, not a benchmark target.
+      # Contract cdylibs are typically tens of KB; 1 MiB should never be hit by
+      # an intentional change, so crossing it means something structurally
+      # unexpected slipped in (e.g. a dependency dragged into a contract).
+      # Threshold is documented in README.md ("Building to wasm").
+      - name: Size guard
+        run: |
+          set -euo pipefail
+          threshold=$((1024 * 1024))
+          found=0
+          for wasm in target/wasm32v1-none/release/*.wasm; do
+            [ -f "$wasm" ] || continue
+            found=1
+            size=$(stat -c %s "$wasm")
+            echo "::notice::$wasm: $size bytes (guard <= $threshold)"
+            if [ "$size" -gt "$threshold" ]; then
+              echo "::error::$wasm is $size bytes, over the $threshold byte size guard"
+              exit 1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no .wasm artifacts produced"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasm
+          path: target/wasm32v1-none/release/*.wasm
+          if-no-files-found: error
+          retention-days: 14

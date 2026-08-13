@@ -104,6 +104,13 @@ cargo build --workspace --exclude harness --target wasm32v1-none --release
 
 Artifacts land in `target/wasm32v1-none/release/*.wasm`.
 
+CI uploads every `.wasm` as a downloadable build artifact
+(`contract-wasm`, retained 14 days) and runs a **size guard** that fails if any
+artifact exceeds **1 MiB**. This is a generous regression tripwire, not a
+benchmark target: contract cdylibs are typically tens of KB, so a 1 MiB crossing
+means something structurally unexpected slipped into a contract (e.g. an
+unintended dependency), not a routine edit.
+
 > If you are pinned to a toolchain where `wasm32-unknown-unknown` is still the
 > required target name for your tooling, you would need Rust <= 1.81 — but
 > soroban-sdk 27's dependency tree requires edition 2024, so 1.81 and earlier
