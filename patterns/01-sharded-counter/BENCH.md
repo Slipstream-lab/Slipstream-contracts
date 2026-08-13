@@ -82,6 +82,6 @@ Raw `slipstream diff naive optimized --json` deltas for `01-sharded-counter`, ge
 | storage reads | +1 |
 | detector findings | 0 |
 
-_Provenance: OS=macos, arch=aarch64, rustc=rustc 1.97.1 (8bab26f4f 2026-07-14), slipstream=slipstream 0.1.0, contracts@779c6110a2005a7b7869d25b6e81b9bbfaefd549, core@ed12035051a7fa8d1004cce8f33f9ea96e8ef0d8, run=1786621185, command=`./target/debug/slipstream-harness bench`_
+_Provenance: OS=macos, arch=aarch64, rustc=rustc 1.97.1 (8bab26f4f 2026-07-14), slipstream=slipstream 0.1.0, contracts@ed2e26e8f1f03e0417eee018fe1c7e3ce927ebaa, core@ed12035051a7fa8d1004cce8f33f9ea96e8ef0d8, run=1786621290, command=`./target/debug/slipstream-harness bench`_
 
 <!-- BENCH-MEASURED-END -->
