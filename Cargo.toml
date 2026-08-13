@@ -11,6 +11,8 @@ members = [
     "patterns/04-temporary-nonce/optimized",
     "patterns/05-batched-admin-writes/naive",
     "patterns/05-batched-admin-writes/optimized",
+    "patterns/06-event-log/naive",
+    "patterns/06-event-log/optimized",
     "harness",
 ]
 
