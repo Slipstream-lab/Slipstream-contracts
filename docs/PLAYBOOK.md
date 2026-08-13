@@ -44,6 +44,22 @@ measurement methodology.
 These families are not mutually exclusive; real contracts often combine them
 (e.g. per-user keys that also batch that user's fields into one struct).
 
+### Pattern → contention mapping
+
+The table below summarises each pattern's contention class, the ledger-key
+shape each side demonstrates, and the expected CAP-0063 stage effect. Key
+shapes use the `slipstream-core` vocabulary (dotted static keys; `(dynamic)`
+marks a key the static analyzer cannot fully resolve at compile time). Rows
+link to the measured-deltas methodology in each pattern's `BENCH.md`.
+
+| Pattern | Contention class | Naive key shape | Optimized key shape | Expected stage / parallelism effect |
+| --- | --- | --- | --- | --- |
+| 01-sharded-counter ([BENCH.md](patterns/01-sharded-counter/BENCH.md)) | Global write hot key | `Counter` — one key read+written by every `increment` (`read-modify-write`) | `("shard", i)` — N disjoint shard keys | increments to distinct shards touch disjoint keys and run in the same stage; only `total()` reads all N |
+| 02-per-user-balance ([BENCH.md](patterns/02-per-user-balance/BENCH.md)) | False sharing in a container | `Balances` — whole map under one key, rewritten on every deposit/transfer | `Balance(addr)` — one key per account | deposits to distinct accounts are independent (parallel); transfers conflict only on shared endpoints |
+| 03-lazy-fee-accrual ([BENCH.md](patterns/03-lazy-fee-accrual/BENCH.md)) | Eager global accumulator | `(dynamic)` + `FeePool` — shared RMW on every `operate` | per-writer `(dynamic)` record; `FeePool` only on rare `sweep` | distinct writers' ops run in parallel; the shared key is touched only by reconciliation |
+| 04-temporary-nonce ([BENCH.md](patterns/04-temporary-nonce/BENCH.md)) | Global monotonic counter | `Nonce` — one counter RMW on every `next` | per-user `(dynamic)` key + temporary storage | distinct users hold disjoint keys; uniqueness is scoped per user and evicts cheaply |
+| 05-batched-admin-writes ([BENCH.md](patterns/05-batched-admin-writes/BENCH.md)) | Wide write-footprint | `(dynamic)` — many keys written in a loop per `set_config` (`write-in-loop`) | `Config` — one key holding the whole struct | the write-footprint collapses from N keys to one, shrinking conflict-graph surface per op |
+
 ## The five patterns
 
 ### 01 - Sharded counter
